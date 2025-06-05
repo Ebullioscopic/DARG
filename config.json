@@ -1,0 +1,24 @@
+{
+    "initial_grid_levels": 4,
+    "base_max_pop_per_cell": 150,
+    "min_pop_per_cell": 15,
+    "max_grid_depth": 20,
+    "beam_width_B": 8,
+    "K_top_candidates": 100,
+    "echo_trigger_threshold_S": 0.55,
+    "echo_search_K_top_trigger": 15,
+    "echo_search_N_echo": 5,
+    "pca_pop_trigger_for_split": 25,
+    "proj_dimensions": 32,
+    "pca_batch_size": 2000,
+    "LID_influence_factor": 0.4,
+    "LID_sample_size": 75,
+    "max_linkage_cache_size": 30,
+    "epsilon_exploration_linkage": 0.15,
+    "min_resonance_hit_rate_linkage": 0.6,
+    "linkage_activation_decay_factor": 0.92,
+    "echo_trigger_weights": [0.25, 0.25, 0.35, 0.15],
+    "maintenance_interval_seconds": 180,
+    "updates_threshold_for_pca": 75
+  }
+  
