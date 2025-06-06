@@ -51,7 +51,8 @@ class PerformanceTimer:
                     'count': 0,
                     'min_time': float('inf'),
                     'max_time': 0.0,
-                    'sum_squares': 0.0
+                    'sum_squares': 0.0,
+                    'durations': []  # Store individual durations for percentile calculation
                 }
             
             stats = self._operations[operation_name]
@@ -60,11 +61,36 @@ class PerformanceTimer:
             stats['min_time'] = min(stats['min_time'], duration)
             stats['max_time'] = max(stats['max_time'], duration)
             stats['sum_squares'] += duration * duration
+            stats['durations'].append(duration)
+            
+            # Keep only last 1000 durations to prevent memory issues
+            if len(stats['durations']) > 1000:
+                stats['durations'] = stats['durations'][-1000:]
             
             return duration
     
+    def _calculate_percentile(self, durations: list, percentile: float) -> float:
+        """Calculate percentile from sorted durations"""
+        if not durations:
+            return 0.0
+        
+        sorted_durations = sorted(durations)
+        index = (percentile / 100.0) * (len(sorted_durations) - 1)
+        
+        if index.is_integer():
+            return sorted_durations[int(index)]
+        else:
+            lower_index = int(index)
+            upper_index = lower_index + 1
+            if upper_index >= len(sorted_durations):
+                return sorted_durations[lower_index]
+            
+            # Linear interpolation
+            weight = index - lower_index
+            return sorted_durations[lower_index] * (1 - weight) + sorted_durations[upper_index] * weight
+    
     def get_stats(self) -> Dict[str, Dict]:
-        """Get comprehensive timing statistics"""
+        """Get comprehensive timing statistics including percentiles"""
         with self._lock:
             result = {}
             for op_name, stats in self._operations.items():
@@ -73,13 +99,21 @@ class PerformanceTimer:
                     variance = (stats['sum_squares'] / stats['count']) - (avg_time * avg_time)
                     std_dev = (variance ** 0.5) if variance > 0 else 0.0
                     
+                    # Calculate percentiles
+                    p50_time = self._calculate_percentile(stats['durations'], 50)
+                    p95_time = self._calculate_percentile(stats['durations'], 95)
+                    p99_time = self._calculate_percentile(stats['durations'], 99)
+                    
                     result[op_name] = {
                         'count': stats['count'],
                         'total_time': stats['total_time'],
                         'avg_time': avg_time,
                         'min_time': stats['min_time'],
                         'max_time': stats['max_time'],
-                        'std_dev': std_dev
+                        'std_dev': std_dev,
+                        'p50_time': p50_time,
+                        'p95_time': p95_time,
+                        'p99_time': p99_time
                     }
             return result
     
@@ -90,24 +124,25 @@ class PerformanceTimer:
             print("No timing data available")
             return
         
-        print("\n" + "="*90)
+        print("\n" + "="*110)
         print("DARG v2.2 PERFORMANCE SUMMARY")
-        print("="*90)
+        print("="*110)
         
         # Sort by total time
         sorted_ops = sorted(stats.items(), key=lambda x: x[1]['total_time'], reverse=True)
         
-        print(f"{'Operation':<30} {'Count':<8} {'Total(s)':<10} {'Avg(ms)':<10} {'Min(ms)':<10} {'Max(ms)':<10}")
-        print("-" * 90)
+        print(f"{'Operation':<30} {'Count':<8} {'Total(s)':<10} {'Avg(ms)':<10} {'P50(ms)':<10} {'P95(ms)':<10} {'P99(ms)':<10}")
+        print("-" * 110)
         
         for op_name, op_stats in sorted_ops:
             print(f"{op_name:<30} {op_stats['count']:<8} "
                   f"{op_stats['total_time']:<10.4f} "
                   f"{op_stats['avg_time']*1000:<10.3f} "
-                  f"{op_stats['min_time']*1000:<10.3f} "
-                  f"{op_stats['max_time']*1000:<10.3f}")
+                  f"{op_stats['p50_time']*1000:<10.3f} "
+                  f"{op_stats['p95_time']*1000:<10.3f} "
+                  f"{op_stats['p99_time']*1000:<10.3f}")
         
-        print("="*90)
+        print("="*110)
     
     def reset_stats(self):
         """Reset all timing statistics"""
@@ -752,7 +787,7 @@ class GridManager:
                     target_cell_id=cell.parent_cell_id,
                     target_cell_rep_proj=parent.representative_vector_proj.copy(),
                     activation_score=1.0,
-                    last_activation_timestamp: float = time.time()
+                    last_activation_timestamp=time.time()
                 )
                 cell.linkage_cache.append(entry)
         
@@ -768,7 +803,7 @@ class GridManager:
                                 target_cell_id=sibling_id,
                                 target_cell_rep_proj=sibling.representative_vector_proj.copy(),
                                 activation_score=0.8,
-                                last_activation_timestamp: float = time.time()
+                                last_activation_timestamp=time.time()
                             )
                             cell.linkage_cache.append(entry)
     
