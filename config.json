@@ -4,7 +4,7 @@
     "min_pop_per_cell": 15,
     "max_grid_depth": 20,
     "beam_width_B": 8,
-    "K_top_candidates": 100,
+    "K_top_candidates": 10,
     "echo_trigger_threshold_S": 0.55,
     "echo_search_K_top_trigger": 15,
     "echo_search_N_echo": 5,

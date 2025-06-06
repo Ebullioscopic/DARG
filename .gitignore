@@ -1,0 +1,22 @@
+*.joblib
+*.json
+*.manifest
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pkl
+*.egg
+*.egg-info/
+# Ignore all files in the data directory
+data/*
+# But keep the data directory itself
+!data/
+# Ignore all files in the models directory
+models/*
+# But keep the models directory itself
+!models/
+# Ignore all files in the experiments directory
+experiments/*
+# But keep config.json (negate the previous rule)
+!config.json

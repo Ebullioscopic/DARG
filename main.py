@@ -13,11 +13,149 @@ import pickle
 from sklearn.decomposition import IncrementalPCA
 from sklearn.neighbors import NearestNeighbors
 import warnings
+import orjson
+import joblib
+import os
+from functools import wraps
 warnings.filterwarnings('ignore')
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# Performance Timing Framework
+# ============================================================================
+
+class PerformanceTimer:
+    """Comprehensive performance timing for DARG v2.2 operations"""
+    
+    def __init__(self):
+        self.timing_stats = defaultdict(list)
+        self.operation_counts = defaultdict(int)
+        self.current_operations = {}
+        self.lock = threading.Lock()
+    
+    def start_operation(self, operation_name: str, details: str = "") -> str:
+        """Start timing an operation and return operation ID"""
+        operation_id = f"{operation_name}_{uuid.uuid4().hex[:8]}"
+        start_time = time.perf_counter()
+        
+        with self.lock:
+            self.current_operations[operation_id] = {
+                'name': operation_name,
+                'details': details,
+                'start_time': start_time,
+                'nested_operations': []
+            }
+        
+        return operation_id
+    
+    def end_operation(self, operation_id: str) -> float:
+        """End timing an operation and return duration"""
+        end_time = time.perf_counter()
+        
+        with self.lock:
+            if operation_id not in self.current_operations:
+                return 0.0
+            
+            operation = self.current_operations[operation_id]
+            duration = end_time - operation['start_time']
+            
+            # Store timing statistics
+            operation_name = operation['name']
+            self.timing_stats[operation_name].append(duration)
+            self.operation_counts[operation_name] += 1
+            
+            # Log performance
+            details_str = f" ({operation['details']})" if operation['details'] else ""
+            logger.info(f"⏱️  {operation_name}{details_str}: {duration:.6f}s")
+            
+            # Clean up
+            del self.current_operations[operation_id]
+            
+            return duration
+    
+    def get_stats(self, operation_name: str = None) -> Dict[str, Any]:
+        """Get performance statistics"""
+        with self.lock:
+            if operation_name:
+                if operation_name not in self.timing_stats:
+                    return {}
+                
+                times = self.timing_stats[operation_name]
+                return {
+                    'operation': operation_name,
+                    'count': len(times),
+                    'total_time': sum(times),
+                    'avg_time': np.mean(times),
+                    'min_time': min(times),
+                    'max_time': max(times),
+                    'std_time': np.std(times),
+                    'p50_time': np.percentile(times, 50),
+                    'p95_time': np.percentile(times, 95),
+                    'p99_time': np.percentile(times, 99)
+                }
+            else:
+                # Return all statistics
+                all_stats = {}
+                for op_name in self.timing_stats:
+                    all_stats[op_name] = self.get_stats(op_name)
+                return all_stats
+    
+    def print_summary(self):
+        """Print a comprehensive timing summary"""
+        print("\n" + "="*80)
+        print("DARG v2.2 PERFORMANCE SUMMARY")
+        print("="*80)
+        
+        all_stats = self.get_stats()
+        
+        # Sort by total time
+        sorted_ops = sorted(all_stats.items(), 
+                          key=lambda x: x[1].get('total_time', 0), 
+                          reverse=True)
+        
+        for op_name, stats in sorted_ops:
+            print(f"\n{op_name}:")
+            print(f"  Count: {stats['count']}")
+            print(f"  Total Time: {stats['total_time']:.6f}s")
+            print(f"  Avg Time: {stats['avg_time']:.6f}s")
+            print(f"  Min/Max: {stats['min_time']:.6f}s / {stats['max_time']:.6f}s")
+            print(f"  P50/P95/P99: {stats['p50_time']:.6f}s / {stats['p95_time']:.6f}s / {stats['p99_time']:.6f}s")
+    
+    def reset_stats(self):
+        """Reset all timing statistics"""
+        with self.lock:
+            self.timing_stats.clear()
+            self.operation_counts.clear()
+            self.current_operations.clear()
+
+# Global performance timer instance
+performance_timer = PerformanceTimer()
+
+def time_operation(operation_name: str, include_args: bool = False):
+    """Decorator to time function execution"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            details = ""
+            if include_args and args:
+                if hasattr(args[0], '__class__'):
+                    details = f"{args[0].__class__.__name__}"
+                if len(args) > 1:
+                    details += f" args_count:{len(args)-1}"
+                if kwargs:
+                    details += f" kwargs_count:{len(kwargs)}"
+            
+            op_id = performance_timer.start_operation(operation_name, details)
+            try:
+                result = func(*args, **kwargs)
+                return result
+            finally:
+                performance_timer.end_operation(op_id)
+        return wrapper
+    return decorator
 
 # ============================================================================
 # Module 1: Global Configuration & Utilities
@@ -47,6 +185,7 @@ class GlobalConfig:
     # LID parameters
     LID_influence_factor: float = 0.3
     LID_sample_size: int = 50
+    Threshold_LID_Updates: int = 100
     
     # Linkage cache parameters
     max_linkage_cache_size: int = 20
@@ -62,6 +201,7 @@ class GlobalConfig:
     updates_threshold_for_pca: int = 50
     
     @classmethod
+    @time_operation("config_load")
     def from_file(cls, filepath: str) -> 'GlobalConfig':
         """Load configuration from JSON file"""
         try:
@@ -76,6 +216,7 @@ class Utils:
     """Utility functions for DARG v2.2"""
     
     @staticmethod
+    @time_operation("distance_calculation")
     def calculate_distance(vec1: np.ndarray, vec2: np.ndarray, metric: str = 'euclidean') -> float:
         """Calculate distance between two vectors"""
         if metric == 'euclidean':
@@ -90,6 +231,7 @@ class Utils:
             raise ValueError(f"Unknown metric: {metric}")
     
     @staticmethod
+    @time_operation("vector_mean_calculation")
     def vector_mean(vectors: List[np.ndarray]) -> np.ndarray:
         """Calculate mean of vectors"""
         if not vectors:
@@ -97,6 +239,7 @@ class Utils:
         return np.mean(vectors, axis=0)
     
     @staticmethod
+    @time_operation("batch_pca", include_args=True)
     def batch_pca(points: List[np.ndarray], n_components: int) -> Dict[str, Any]:
         """Perform batch PCA on points"""
         if len(points) < 2:
@@ -119,6 +262,7 @@ class Utils:
         }
     
     @staticmethod
+    @time_operation("incremental_pca_update", include_args=True)
     def incremental_pca_update(pca_model: Dict[str, Any], new_vector: np.ndarray) -> Dict[str, Any]:
         """Update PCA model incrementally"""
         if pca_model is None:
@@ -137,6 +281,7 @@ class Utils:
         return pca_model
     
     @staticmethod
+    @time_operation("project_vector")
     def project_vector(vector: np.ndarray, pca_model: Dict[str, Any]) -> np.ndarray:
         """Project vector using PCA model"""
         if pca_model is None:
@@ -146,6 +291,7 @@ class Utils:
         return np.dot(centered, pca_model['components'].T)
     
     @staticmethod
+    @time_operation("estimate_lid_two_nn", include_args=True)
     def estimate_lid_two_nn(points: List[np.ndarray]) -> float:
         """Estimate Local Intrinsic Dimension using Two-NN method"""
         if len(points) < 3:
@@ -235,6 +381,7 @@ class PointDB:
         # Recreate the lock
         self._lock = threading.RLock()
     
+    @time_operation("store_point", include_args=True)
     def store_point(self, point_id: str, vector: np.ndarray, leaf_cell_id: str) -> bool:
         """Store point with its vector and cell assignment"""
         try:
@@ -246,16 +393,19 @@ class PointDB:
             logger.error(f"Error storing point {point_id}: {e}")
             return False
     
+    @time_operation("get_point_vector")
     def get_point_vector(self, point_id: str) -> Optional[np.ndarray]:
         """Get original vector for point"""
         with self._lock:
             return self.point_vectors_store.get(point_id)
     
+    @time_operation("get_point_leaf_cell")
     def get_point_leaf_cell(self, point_id: str) -> Optional[str]:
         """Get leaf cell ID for point"""
         with self._lock:
             return self.point_to_cell_map.get(point_id)
     
+    @time_operation("delete_point", include_args=True)
     def delete_point(self, point_id: str) -> bool:
         """Delete point from database"""
         try:
@@ -267,6 +417,7 @@ class PointDB:
             logger.error(f"Error deleting point {point_id}: {e}")
             return False
     
+    @time_operation("update_point_cell", include_args=True)
     def update_point_cell(self, point_id: str, new_cell_id: str) -> bool:
         """Update cell assignment for point"""
         try:
@@ -298,7 +449,7 @@ class QueryStats:
     queries_hopped_via_linkage: int = 0
 
 @dataclass
-class Cell:
+class CellObject:
     """Cell object in the grid"""
     cell_id: str
     level: int
@@ -318,6 +469,7 @@ class Cell:
     local_LID_estimate: float = 1.0
     max_pop_local: int = 100
     updates_since_last_pca: int = 0
+    updates_since_last_LID_calc: int = 0
     
     # Linkage cache
     linkage_cache: List[LinkageEntry] = field(default_factory=list)
@@ -348,7 +500,7 @@ class GridManager:
     
     def __init__(self, config: GlobalConfig):
         self.config = config
-        self.cells_store: Dict[str, Cell] = {}
+        self.cells_store: Dict[str, CellObject] = {}
         self.root_cell_id: Optional[str] = None
         self.max_grid_depth_reached: int = 0
         self._lock = threading.RLock()
@@ -367,6 +519,7 @@ class GridManager:
         # Recreate the lock
         self._lock = threading.RLock()
 
+    @time_operation("initialize_grid", include_args=True)
     def initialize_grid(self, initial_data_sample: Optional[List[np.ndarray]] = None) -> str:
         """Initialize the grid structure"""
         with self._lock:
@@ -394,22 +547,27 @@ class GridManager:
                 max_coords = np.full(dimensions, 1000.0)
             
             root_aabb = AABB(min_coords, max_coords)
-            root_cell = Cell(
+            root_cell = CellObject(
                 cell_id=str(uuid.uuid4()),
                 level=0,
                 boundary_box=root_aabb,
                 max_pop_local=self.config.base_max_pop_per_cell
             )
             
+            # Initialize root representative from sample data
+            if initial_data_sample and len(initial_data_sample) > 0:
+                root_cell.representative_vector_orig = Utils.vector_mean(initial_data_sample)
+                root_cell.representative_vector_proj = self._project_vector_global(root_cell.representative_vector_orig)
+            
             self.root_cell_id = root_cell.cell_id
             self.cells_store[root_cell.cell_id] = root_cell
             
-            # Initialize with some levels if specified
-            if self.config.initial_grid_levels > 0:
-                self._create_initial_levels(root_cell.cell_id, self.config.initial_grid_levels)
+            # DON'T create initial levels - let them be created dynamically as needed
+            # This avoids creating empty cells that break routing
             
             return self.root_cell_id
     
+    @time_operation("create_initial_levels", include_args=True)
     def _create_initial_levels(self, cell_id: str, levels_remaining: int):
         """Create initial grid levels"""
         if levels_remaining <= 0:
@@ -431,17 +589,20 @@ class GridManager:
             self._create_initial_levels(child1_id, levels_remaining - 1)
             self._create_initial_levels(child2_id, levels_remaining - 1)
     
-    def get_cell(self, cell_id: str) -> Optional[Cell]:
+    @time_operation("get_cell")
+    def get_cell(self, cell_id: str) -> Optional[CellObject]:
         """Get cell by ID"""
         with self._lock:
             return self.cells_store.get(cell_id)
     
-    def update_cell(self, cell: Cell):
+    @time_operation("update_cell")
+    def update_cell(self, cell: CellObject):
         """Update cell in store"""
         with self._lock:
             self.cells_store[cell.cell_id] = cell
     
-    def find_leaf_cell_for_vector(self, vector_orig: np.ndarray, vector_proj: Optional[np.ndarray] = None) -> Optional[Cell]:
+    @time_operation("find_leaf_cell", include_args=True)
+    def find_leaf_cell_for_vector(self, vector_orig: np.ndarray, vector_proj: Optional[np.ndarray] = None) -> Optional[CellObject]:
         """Find leaf cell for given vector"""
         if vector_proj is None:
             vector_proj = self._project_vector_global(vector_orig)
@@ -483,6 +644,7 @@ class GridManager:
             
             current_cell_id = best_child_id
     
+    @time_operation("split_cell", include_args=True)
     def split_cell(self, cell_id: str, split_dim: Optional[int] = None, split_value: Optional[float] = None) -> Optional[Tuple[str, str]]:
         """Split a cell into two children"""
         with self._lock:
@@ -501,7 +663,7 @@ class GridManager:
             child1_aabb, child2_aabb = cell.boundary_box.split(split_dim, split_value)
             
             # Create child cells
-            child1 = Cell(
+            child1 = CellObject(
                 cell_id=str(uuid.uuid4()),
                 level=cell.level + 1,
                 boundary_box=child1_aabb,
@@ -509,7 +671,7 @@ class GridManager:
                 max_pop_local=cell.max_pop_local
             )
             
-            child2 = Cell(
+            child2 = CellObject(
                 cell_id=str(uuid.uuid4()),
                 level=cell.level + 1,
                 boundary_box=child2_aabb,
@@ -562,7 +724,8 @@ class GridManager:
             
             return child1.cell_id, child2.cell_id
     
-    def _compute_cell_representative(self, cell: Cell, point_db):
+    @time_operation("compute_cell_representative", include_args=True)
+    def _compute_cell_representative(self, cell: CellObject, point_db):
         """Compute representative vector for cell"""
         if not cell.point_ids or not point_db:
             return
@@ -597,13 +760,15 @@ class GridManager:
             base_pop = self.config.base_max_pop_per_cell
             cell.max_pop_local = int(base_pop * (1 + self.config.LID_influence_factor * cell.local_LID_estimate))
     
+    @time_operation("project_vector_global")
     def _project_vector_global(self, vector: np.ndarray) -> np.ndarray:
         """Project vector using global PCA model"""
         if self.global_pca_model:
             return Utils.project_vector(vector, self.global_pca_model)
         return vector
     
-    def _initialize_linkage_cache(self, cell: Cell):
+    @time_operation("initialize_linkage_cache")
+    def _initialize_linkage_cache(self, cell: CellObject):
         """Initialize linkage cache for cell"""
         # Add parent link
         if cell.parent_cell_id:
@@ -677,6 +842,7 @@ class UpdateManager:
         # Set point_db reference in grid_manager for splits
         self.grid_manager._point_db = point_db
     
+    @time_operation("insert_point", include_args=True)
     def insert_point(self, point_id: str, vector_orig: np.ndarray) -> bool:
         """Insert a point into the index"""
         try:
@@ -717,6 +883,7 @@ class UpdateManager:
             logger.error(f"Error inserting point {point_id}: {e}")
             return False
     
+    @time_operation("delete_point_update", include_args=True)
     def delete_point(self, point_id: str) -> bool:
         """Delete a point from the index"""
         try:
@@ -762,7 +929,8 @@ class UpdateManager:
             logger.error(f"Error deleting point {point_id}: {e}")
             return False
     
-    def _update_cell_representative(self, cell: Cell, vector: np.ndarray, is_addition: bool):
+    @time_operation("update_cell_representative", include_args=True)
+    def _update_cell_representative(self, cell: CellObject, vector: np.ndarray, is_addition: bool):
         """Update cell representative incrementally"""
         if cell.representative_vector_orig is None:
             if is_addition:
@@ -786,6 +954,7 @@ class UpdateManager:
         if cell.local_pca_model and is_addition:
             cell.local_pca_model = Utils.incremental_pca_update(cell.local_pca_model, vector)
     
+    @time_operation("bubble_up_counts", include_args=True)
     def _bubble_up_counts(self, parent_cell_id: Optional[str], count_delta: int):
         """Bubble up point count changes to parent cells"""
         while parent_cell_id:
@@ -815,6 +984,7 @@ class SearchOrchestrator:
         self.point_db = point_db
         self.config = config
     
+    @time_operation("search_k_nearest", include_args=True)
     def search_k_nearest(self, query_vector_orig: np.ndarray, k: int) -> List[SearchResult]:
         """Search for k nearest neighbors"""
         try:
@@ -839,6 +1009,7 @@ class SearchOrchestrator:
             logger.error(f"Error in search: {e}")
             return []
     
+    @time_operation("phase1_grid_resonance", include_args=True)
     def _phase1_grid_resonance(self, query_vector_proj: np.ndarray) -> List[str]:
         """Phase 1: Grid resonance with beam search"""
         if not self.grid_manager.root_cell_id:
@@ -894,7 +1065,8 @@ class SearchOrchestrator:
         
         return list(set(candidate_leaf_cells))  # Remove duplicates
     
-    def _explore_linkage_cache(self, cell: Cell, query_vector_proj: np.ndarray) -> List[str]:
+    @time_operation("explore_linkage_cache", include_args=True)
+    def _explore_linkage_cache(self, cell: CellObject, query_vector_proj: np.ndarray) -> List[str]:
         """Explore linkage cache for additional candidates"""
         if not cell.linkage_cache:
             return []
@@ -936,6 +1108,7 @@ class SearchOrchestrator:
         
         return selected_cell_ids
     
+    @time_operation("phase2_localized_refinement", include_args=True)
     def _phase2_localized_refinement(self, query_vector_orig: np.ndarray, candidate_leaf_cells: List[str]) -> List[SearchResult]:
         """Phase 2: Localized refinement in candidate cells"""
         potential_nns = []
@@ -955,6 +1128,7 @@ class SearchOrchestrator:
         potential_nns.sort(key=lambda x: x.distance)
         return potential_nns[:self.config.K_top_candidates]
     
+    @time_operation("calculate_s_trigger")
     def _calculate_s_trigger(self, potential_nns: List[SearchResult], 
                            query_vector_orig: np.ndarray, 
                            candidate_cells: List[str]) -> float:
@@ -983,6 +1157,7 @@ class SearchOrchestrator:
         
         return s_trigger
     
+    @time_operation("phase3_echo_search", include_args=True)
     def _phase3_echo_search(self, query_vector_orig: np.ndarray, top_candidates: List[SearchResult]) -> List[SearchResult]:
         """Phase 3: Echo search in linked cells"""
         echo_results = []
@@ -1058,6 +1233,7 @@ class MaintenanceScheduler:
                 logger.error(f"Error in maintenance loop: {e}")
                 time.sleep(60)  # Wait before retrying
     
+    @time_operation("run_maintenance_tasks")
     def _run_maintenance_tasks(self):
         """Run all maintenance tasks"""
         logger.info("Running maintenance tasks")
@@ -1073,6 +1249,7 @@ class MaintenanceScheduler:
         
         logger.info("Maintenance tasks completed")
     
+    @time_operation("adapt_linkage_caches")
     def _adapt_linkage_caches(self):
         """Adapt linkage caches across all cells"""
         current_time = time.time()
@@ -1095,7 +1272,8 @@ class MaintenanceScheduler:
             
             self.grid_manager.update_cell(cell)
     
-    def _add_geometric_links(self, cell: Cell):
+    @time_operation("add_geometric_links", include_args=True)
+    def _add_geometric_links(self, cell: CellObject):
         """Add new geometric links to cell's linkage cache"""
         if not cell.representative_vector_proj is not None:
             return
@@ -1136,6 +1314,7 @@ class MaintenanceScheduler:
                 cell.linkage_cache.append(entry)
                 added += 1
     
+    @time_operation("reestimate_lid_values")
     def _reestimate_lid_values(self):
         """Re-estimate LID values for cells with significant updates"""
         point_db = getattr(self.grid_manager, '_point_db', None)
@@ -1172,6 +1351,7 @@ class MaintenanceScheduler:
                 
                 self.grid_manager.update_cell(cell)
     
+    @time_operation("refresh_stale_pca_models")
     def _refresh_stale_pca_models(self):
         """Refresh stale PCA models"""
         point_db = getattr(self.grid_manager, '_point_db', None)
@@ -1229,6 +1409,7 @@ class DARGv22:
         self.initialized = False
         logger.info("DARG v2.2 system created")
     
+    @time_operation("darg_initialize", include_args=True)
     def initialize(self, initial_data: Optional[List[np.ndarray]] = None):
         """Initialize the DARG system"""
         if not self.initialized:
@@ -1239,6 +1420,7 @@ class DARGv22:
         else:
             logger.warning("System already initialized")
     
+    @time_operation("darg_insert", include_args=True)
     def insert(self, point_id: str, vector: np.ndarray) -> bool:
         """Insert a point into the index"""
         if not self.initialized:
@@ -1246,6 +1428,7 @@ class DARGv22:
         
         return self.update_manager.insert_point(point_id, vector)
     
+    @time_operation("darg_delete", include_args=True)
     def delete(self, point_id: str) -> bool:
         """Delete a point from the index"""
         if not self.initialized:
@@ -1253,6 +1436,7 @@ class DARGv22:
         
         return self.update_manager.delete_point(point_id)
     
+    @time_operation("darg_search", include_args=True)
     def search(self, query_vector: np.ndarray, k: int = 10) -> List[Tuple[str, float]]:
         """Search for k nearest neighbors"""
         if not self.initialized:
@@ -1283,48 +1467,265 @@ class DARGv22:
         self.maintenance_scheduler.stop()
         logger.info("DARG v2.2 system shutdown")
     
+    @time_operation("darg_save_index", include_args=True)
     def save_index(self, filepath: str):
-        """Save index to file"""
+        """Save index to file using high-performance serialization"""
         # Stop maintenance scheduler temporarily
         was_running = self.maintenance_scheduler.running
         if was_running:
             self.maintenance_scheduler.stop()
         
         try:
-            # Prepare data for serialization (excluding locks and non-serializable objects)
+            logger.info("Starting high-performance index serialization...")
+            base_path = filepath.rsplit('.', 1)[0]  # Remove extension
+            
+            # Separate numpy arrays from serializable data
+            numpy_data = {}
+            serializable_data = {
+                'config': self.config.__dict__,
+                'root_cell_id': self.grid_manager.root_cell_id,
+                'max_grid_depth_reached': self.grid_manager.max_grid_depth_reached
+            }
+            
+            # Process cells data
             cells_data = {}
             for cell_id, cell in self.grid_manager.cells_store.items():
                 cell_state = cell.__getstate__() if hasattr(cell, '__getstate__') else cell.__dict__.copy()
                 if '_lock' in cell_state:
                     del cell_state['_lock']
-                cells_data[cell_id] = cell_state
+                
+                # Extract numpy arrays
+                cell_numpy = {}
+                cell_serializable = {}
+                
+                for key, value in cell_state.items():
+                    if isinstance(value, np.ndarray):
+                        array_key = f"cell_{cell_id}_{key}"
+                        numpy_data[array_key] = value
+                        cell_serializable[key] = f"__NUMPY_REF__{array_key}"
+                    elif key == 'boundary_box':
+                        # Handle AABB specially
+                        if hasattr(value, 'min_coords') and hasattr(value, 'max_coords'):
+                            min_key = f"cell_{cell_id}_boundary_min"
+                            max_key = f"cell_{cell_id}_boundary_max"
+                            numpy_data[min_key] = value.min_coords
+                            numpy_data[max_key] = value.max_coords
+                            cell_serializable[key] = {
+                                'min_coords': f"__NUMPY_REF__{min_key}",
+                                'max_coords': f"__NUMPY_REF__{max_key}"
+                            }
+                        else:
+                            cell_serializable[key] = value
+                    elif key == 'local_pca_model' and value is not None:
+                        # Handle PCA model
+                        pca_data = {}
+                        pca_numpy = {}
+                        for pca_key, pca_value in value.items():
+                            if isinstance(pca_value, np.ndarray):
+                                pca_array_key = f"cell_{cell_id}_pca_{pca_key}"
+                                numpy_data[pca_array_key] = pca_value
+                                pca_data[pca_key] = f"__NUMPY_REF__{pca_array_key}"
+                            else:
+                                pca_data[pca_key] = pca_value
+                        cell_serializable[key] = pca_data
+                    else:
+                        cell_serializable[key] = value
+                
+                cells_data[cell_id] = cell_serializable
             
-            point_db_state = self.point_db.__getstate__() if hasattr(self.point_db, '__getstate__') else {
-                'point_vectors_store': self.point_db.point_vectors_store,
+            serializable_data['cells_store'] = cells_data
+            
+            # Process global PCA model
+            if self.grid_manager.global_pca_model:
+                global_pca_data = {}
+                for key, value in self.grid_manager.global_pca_model.items():
+                    if isinstance(value, np.ndarray):
+                        array_key = f"global_pca_{key}"
+                        numpy_data[array_key] = value
+                        global_pca_data[key] = f"__NUMPY_REF__{array_key}"
+                    else:
+                        global_pca_data[key] = value
+                serializable_data['global_pca_model'] = global_pca_data
+            else:
+                serializable_data['global_pca_model'] = None
+            
+            # Process point database
+            point_vectors = {}
+            for point_id, vector in self.point_db.point_vectors_store.items():
+                array_key = f"point_{point_id}"
+                numpy_data[array_key] = vector
+                point_vectors[point_id] = f"__NUMPY_REF__{array_key}"
+            
+            serializable_data['point_db_state'] = {
+                'point_vectors_store': point_vectors,
                 'point_to_cell_map': self.point_db.point_to_cell_map
             }
             
-            index_data = {
-                'config': self.config.__dict__,
-                'cells_store': cells_data,
-                'root_cell_id': self.grid_manager.root_cell_id,
-                'max_grid_depth_reached': self.grid_manager.max_grid_depth_reached,
-                'global_pca_model': self.grid_manager.global_pca_model,
-                'point_db_state': point_db_state
+            # Save numpy arrays using joblib (very fast)
+            numpy_path = f"{base_path}_arrays.joblib"
+            joblib.dump(numpy_data, numpy_path, compress=3)
+            logger.info(f"Saved {len(numpy_data)} numpy arrays to {numpy_path}")
+            
+            # Save serializable data using orjson (ultra-fast JSON)
+            json_path = f"{base_path}_data.json"
+            with open(json_path, 'wb') as f:
+                f.write(orjson.dumps(serializable_data, option=orjson.OPT_SERIALIZE_NUMPY))
+            logger.info(f"Saved serializable data to {json_path}")
+            
+            # Create manifest file
+            manifest = {
+                'version': '2.2',
+                'format': 'split_fast',
+                'arrays_file': os.path.basename(numpy_path),
+                'data_file': os.path.basename(json_path),
+                'array_count': len(numpy_data),
+                'timestamp': time.time()
             }
             
-            with open(filepath, 'wb') as f:
-                pickle.dump(index_data, f)
+            manifest_path = f"{base_path}.manifest"
+            with open(manifest_path, 'wb') as f:
+                f.write(orjson.dumps(manifest))
             
-            logger.info(f"Index saved to {filepath}")
+            logger.info(f"Index saved successfully to {base_path}.*")
             
+        except Exception as e:
+            logger.error(f"Error saving index: {e}")
+            raise
         finally:
             # Restart maintenance scheduler if it was running
             if was_running:
                 self.maintenance_scheduler.start()
 
+    @time_operation("darg_load_index", include_args=True)
     def load_index(self, filepath: str):
-        """Load index from file"""
+        """Load index from file supporting both old pickle and new fast format"""
+        # Check if it's new format by looking for manifest
+        base_path = filepath.rsplit('.', 1)[0]
+        manifest_path = f"{base_path}.manifest"
+        
+        if os.path.exists(manifest_path):
+            # New fast format
+            self._load_fast_format(base_path)
+        else:
+            # Legacy pickle format
+            self._load_pickle_format(filepath)
+    
+    def _load_fast_format(self, base_path: str):
+        """Load index from fast format"""
+        try:
+            # Load manifest
+            manifest_path = f"{base_path}.manifest"
+            with open(manifest_path, 'rb') as f:
+                manifest = orjson.loads(f.read())
+            
+            logger.info(f"Loading fast format index v{manifest['version']}")
+            
+            # Load numpy arrays
+            arrays_path = os.path.join(os.path.dirname(base_path), manifest['arrays_file'])
+            numpy_data = joblib.load(arrays_path)
+            logger.info(f"Loaded {manifest['array_count']} numpy arrays")
+            
+            # Load serializable data
+            data_path = os.path.join(os.path.dirname(base_path), manifest['data_file'])
+            with open(data_path, 'rb') as f:
+                serializable_data = orjson.loads(f.read())
+            
+            # Reconstruct data structures
+            self._reconstruct_from_fast_format(serializable_data, numpy_data)
+            
+            logger.info(f"Fast format index loaded successfully")
+            
+        except Exception as e:
+            logger.error(f"Error loading fast format index: {e}")
+            raise
+    
+    def _reconstruct_from_fast_format(self, serializable_data: dict, numpy_data: dict):
+        """Reconstruct data structures from fast format"""
+        # Restore configuration
+        self.config = GlobalConfig(**serializable_data['config'])
+        
+        # Restore grid manager state
+        self.grid_manager = GridManager(self.config)
+        self.grid_manager.root_cell_id = serializable_data['root_cell_id']
+        self.grid_manager.max_grid_depth_reached = serializable_data['max_grid_depth_reached']
+        
+        # Restore global PCA model
+        if serializable_data['global_pca_model']:
+            global_pca = {}
+            for key, value in serializable_data['global_pca_model'].items():
+                if isinstance(value, str) and value.startswith('__NUMPY_REF__'):
+                    array_key = value.replace('__NUMPY_REF__', '')
+                    global_pca[key] = numpy_data[array_key]
+                else:
+                    global_pca[key] = value
+            self.grid_manager.global_pca_model = global_pca
+        else:
+            self.grid_manager.global_pca_model = None
+        
+        # Restore cells
+        self.grid_manager.cells_store = {}
+        for cell_id, cell_state in serializable_data['cells_store'].items():
+            # Reconstruct cell data
+            reconstructed_state = {}
+            for key, value in cell_state.items():
+                if isinstance(value, str) and value.startswith('__NUMPY_REF__'):
+                    array_key = value.replace('__NUMPY_REF__', '')
+                    reconstructed_state[key] = numpy_data[array_key]
+                elif key == 'boundary_box' and isinstance(value, dict):
+                    # Reconstruct AABB
+                    min_coords = numpy_data[value['min_coords'].replace('__NUMPY_REF__', '')]
+                    max_coords = numpy_data[value['max_coords'].replace('__NUMPY_REF__', '')]
+                    reconstructed_state[key] = AABB(min_coords, max_coords)
+                elif key == 'local_pca_model' and value is not None:
+                    # Reconstruct PCA model
+                    pca_model = {}
+                    for pca_key, pca_value in value.items():
+                        if isinstance(pca_value, str) and pca_value.startswith('__NUMPY_REF__'):
+                            array_key = pca_value.replace('__NUMPY_REF__', '')
+                            pca_model[pca_key] = numpy_data[array_key]
+                        else:
+                            pca_model[pca_key] = pca_value
+                    reconstructed_state[key] = pca_model
+                else:
+                    reconstructed_state[key] = value
+            
+            # Create cell object
+            cell = CellObject(
+                cell_id=reconstructed_state['cell_id'],
+                level=reconstructed_state['level'],
+                boundary_box=reconstructed_state['boundary_box']
+            )
+            cell.__setstate__(reconstructed_state)
+            self.grid_manager.cells_store[cell_id] = cell
+        
+        # Restore point database
+        self.point_db = PointDB()
+        point_db_state = serializable_data.get('point_db_state', {})
+        
+        # Reconstruct point vectors
+        point_vectors_refs = point_db_state.get('point_vectors_store', {})
+        self.point_db.point_vectors_store = {}
+        for point_id, ref in point_vectors_refs.items():
+            if isinstance(ref, str) and ref.startswith('__NUMPY_REF__'):
+                array_key = ref.replace('__NUMPY_REF__', '')
+                self.point_db.point_vectors_store[point_id] = numpy_data[array_key]
+        
+        self.point_db.point_to_cell_map = point_db_state.get('point_to_cell_map', {})
+        
+        # Reinitialize components
+        self.update_manager = UpdateManager(self.grid_manager, self.point_db, self.config)
+        self.search_orchestrator = SearchOrchestrator(self.grid_manager, self.point_db, self.config)
+        self.maintenance_scheduler = MaintenanceScheduler(self.grid_manager, self.config)
+        
+        # Set point_db reference in grid_manager
+        self.grid_manager._point_db = self.point_db
+        
+        self.initialized = True
+        self.maintenance_scheduler.start()
+    
+    def _load_pickle_format(self, filepath: str):
+        """Load index from legacy pickle format"""
+        logger.info("Loading legacy pickle format")
         with open(filepath, 'rb') as f:
             index_data = pickle.load(f)
         
@@ -1340,8 +1741,8 @@ class DARGv22:
         # Restore cells
         self.grid_manager.cells_store = {}
         for cell_id, cell_state in index_data['cells_store'].items():
-            # Recreate Cell object
-            cell = Cell(
+            # Recreate CellObject
+            cell = CellObject(
                 cell_id=cell_state['cell_id'],
                 level=cell_state['level'],
                 boundary_box=cell_state['boundary_box']
@@ -1366,7 +1767,7 @@ class DARGv22:
         self.initialized = True
         self.maintenance_scheduler.start()
         
-        logger.info(f"Index loaded from {filepath}")
+        logger.info(f"Legacy index loaded from {filepath}")
 
 
 # ============================================================================
