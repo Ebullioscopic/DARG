@@ -28,132 +28,106 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 class PerformanceTimer:
-    """Comprehensive performance timing for DARG v2.2 operations"""
+    """Efficient performance timing system - minimal overhead"""
     
     def __init__(self):
-        self.timing_stats = defaultdict(list)
-        self.operation_counts = defaultdict(int)
-        self.current_operations = {}
-        self.lock = threading.Lock()
+        self._operations = {}
+        self._lock = threading.Lock()
     
-    def start_operation(self, operation_name: str, details: str = "") -> str:
-        """Start timing an operation and return operation ID"""
-        operation_id = f"{operation_name}_{uuid.uuid4().hex[:8]}"
+    def start_operation(self, operation_name: str) -> str:
+        """Start timing an operation and return unique operation ID"""
+        operation_id = f"{operation_name}_{int(time.time() * 1000000)}"
         start_time = time.perf_counter()
-        
-        with self.lock:
-            self.current_operations[operation_id] = {
-                'name': operation_name,
-                'details': details,
-                'start_time': start_time,
-                'nested_operations': []
-            }
-        
-        return operation_id
+        return operation_id, start_time
     
-    def end_operation(self, operation_id: str) -> float:
+    def end_operation(self, operation_name: str, start_time: float) -> float:
         """End timing an operation and return duration"""
-        end_time = time.perf_counter()
+        duration = time.perf_counter() - start_time
         
-        with self.lock:
-            if operation_id not in self.current_operations:
-                return 0.0
+        with self._lock:
+            if operation_name not in self._operations:
+                self._operations[operation_name] = {
+                    'total_time': 0.0,
+                    'count': 0,
+                    'min_time': float('inf'),
+                    'max_time': 0.0,
+                    'sum_squares': 0.0
+                }
             
-            operation = self.current_operations[operation_id]
-            duration = end_time - operation['start_time']
-            
-            # Store timing statistics
-            operation_name = operation['name']
-            self.timing_stats[operation_name].append(duration)
-            self.operation_counts[operation_name] += 1
-            
-            # Log performance
-            details_str = f" ({operation['details']})" if operation['details'] else ""
-            logger.info(f"⏱️  {operation_name}{details_str}: {duration:.6f}s")
-            
-            # Clean up
-            del self.current_operations[operation_id]
+            stats = self._operations[operation_name]
+            stats['total_time'] += duration
+            stats['count'] += 1
+            stats['min_time'] = min(stats['min_time'], duration)
+            stats['max_time'] = max(stats['max_time'], duration)
+            stats['sum_squares'] += duration * duration
             
             return duration
     
-    def get_stats(self, operation_name: str = None) -> Dict[str, Any]:
-        """Get performance statistics"""
-        with self.lock:
-            if operation_name:
-                if operation_name not in self.timing_stats:
-                    return {}
-                
-                times = self.timing_stats[operation_name]
-                return {
-                    'operation': operation_name,
-                    'count': len(times),
-                    'total_time': sum(times),
-                    'avg_time': np.mean(times),
-                    'min_time': min(times),
-                    'max_time': max(times),
-                    'std_time': np.std(times),
-                    'p50_time': np.percentile(times, 50),
-                    'p95_time': np.percentile(times, 95),
-                    'p99_time': np.percentile(times, 99)
-                }
-            else:
-                # Return all statistics
-                all_stats = {}
-                for op_name in self.timing_stats:
-                    all_stats[op_name] = self.get_stats(op_name)
-                return all_stats
+    def get_stats(self) -> Dict[str, Dict]:
+        """Get comprehensive timing statistics"""
+        with self._lock:
+            result = {}
+            for op_name, stats in self._operations.items():
+                if stats['count'] > 0:
+                    avg_time = stats['total_time'] / stats['count']
+                    variance = (stats['sum_squares'] / stats['count']) - (avg_time * avg_time)
+                    std_dev = (variance ** 0.5) if variance > 0 else 0.0
+                    
+                    result[op_name] = {
+                        'count': stats['count'],
+                        'total_time': stats['total_time'],
+                        'avg_time': avg_time,
+                        'min_time': stats['min_time'],
+                        'max_time': stats['max_time'],
+                        'std_dev': std_dev
+                    }
+            return result
     
     def print_summary(self):
-        """Print a comprehensive timing summary"""
-        print("\n" + "="*80)
-        print("DARG v2.2 PERFORMANCE SUMMARY")
-        print("="*80)
+        """Print a formatted summary of all timing statistics"""
+        stats = self.get_stats()
+        if not stats:
+            print("No timing data available")
+            return
         
-        all_stats = self.get_stats()
+        print("\n" + "="*90)
+        print("DARG v2.2 PERFORMANCE SUMMARY")
+        print("="*90)
         
         # Sort by total time
-        sorted_ops = sorted(all_stats.items(), 
-                          key=lambda x: x[1].get('total_time', 0), 
-                          reverse=True)
+        sorted_ops = sorted(stats.items(), key=lambda x: x[1]['total_time'], reverse=True)
         
-        for op_name, stats in sorted_ops:
-            print(f"\n{op_name}:")
-            print(f"  Count: {stats['count']}")
-            print(f"  Total Time: {stats['total_time']:.6f}s")
-            print(f"  Avg Time: {stats['avg_time']:.6f}s")
-            print(f"  Min/Max: {stats['min_time']:.6f}s / {stats['max_time']:.6f}s")
-            print(f"  P50/P95/P99: {stats['p50_time']:.6f}s / {stats['p95_time']:.6f}s / {stats['p99_time']:.6f}s")
+        print(f"{'Operation':<30} {'Count':<8} {'Total(s)':<10} {'Avg(ms)':<10} {'Min(ms)':<10} {'Max(ms)':<10}")
+        print("-" * 90)
+        
+        for op_name, op_stats in sorted_ops:
+            print(f"{op_name:<30} {op_stats['count']:<8} "
+                  f"{op_stats['total_time']:<10.4f} "
+                  f"{op_stats['avg_time']*1000:<10.3f} "
+                  f"{op_stats['min_time']*1000:<10.3f} "
+                  f"{op_stats['max_time']*1000:<10.3f}")
+        
+        print("="*90)
     
     def reset_stats(self):
         """Reset all timing statistics"""
-        with self.lock:
-            self.timing_stats.clear()
-            self.operation_counts.clear()
-            self.current_operations.clear()
+        with self._lock:
+            self._operations.clear()
 
 # Global performance timer instance
 performance_timer = PerformanceTimer()
 
 def time_operation(operation_name: str, include_args: bool = False):
-    """Decorator to time function execution"""
+    """Decorator to time function execution - NO individual logging for efficiency"""
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
-            details = ""
-            if include_args and args:
-                if hasattr(args[0], '__class__'):
-                    details = f"{args[0].__class__.__name__}"
-                if len(args) > 1:
-                    details += f" args_count:{len(args)-1}"
-                if kwargs:
-                    details += f" kwargs_count:{len(kwargs)}"
-            
-            op_id = performance_timer.start_operation(operation_name, details)
+            op_id, start_time = performance_timer.start_operation(operation_name)
             try:
                 result = func(*args, **kwargs)
                 return result
             finally:
-                performance_timer.end_operation(op_id)
+                performance_timer.end_operation(operation_name, start_time)
         return wrapper
     return decorator
 
@@ -1220,7 +1194,7 @@ class MaintenanceScheduler:
         """Stop maintenance scheduler"""
         self.running = False
         if self.thread:
-            self.thread.join()
+            self.thread.join(timeout=5.0)  # 5 second timeout
         logger.info("Maintenance scheduler stopped")
     
     def _maintenance_loop(self):
@@ -1228,10 +1202,18 @@ class MaintenanceScheduler:
         while self.running:
             try:
                 self._run_maintenance_tasks()
-                time.sleep(self.config.maintenance_interval_seconds)
+                # Use interruptible sleep
+                for _ in range(self.config.maintenance_interval_seconds):
+                    if not self.running:
+                        break
+                    time.sleep(1)
             except Exception as e:
                 logger.error(f"Error in maintenance loop: {e}")
-                time.sleep(60)  # Wait before retrying
+                # Use interruptible sleep for error recovery too
+                for _ in range(60):
+                    if not self.running:
+                        break
+                    time.sleep(1)
     
     @time_operation("run_maintenance_tasks")
     def _run_maintenance_tasks(self):

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-DARG v2.2 Performance Timing Test Script
+DARG v2.2 Performance Test Script - Clean & Efficient
 
-This script demonstrates the comprehensive performance timing system
-implemented in DARG v2.2. It runs various operations and provides
-detailed timing analysis for optimization purposes.
+This script runs comprehensive performance tests without verbose logging.
+Perfect for testing with large datasets (100K+ points).
 """
 
 import numpy as np
@@ -19,11 +18,291 @@ sys.path.append('/home/akhil/Downloads/temp/DARG')
 
 from main import DARGv22, GlobalConfig, performance_timer
 
-# Configure logging for detailed output
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Minimize logging noise
+logging.basicConfig(level=logging.WARNING)
+
+class DARGPerformanceTest:
+    """Clean performance testing for DARG v2.2"""
+    
+    def __init__(self):
+        self.results = {}
+        print("🚀 DARG v2.2 Performance Test Suite")
+        print("=" * 60)
+    
+    def generate_test_data(self, num_vectors: int = 1000, dimensions: int = 128) -> List[np.ndarray]:
+        """Generate synthetic test data"""
+        print(f"📊 Generating {num_vectors:,} vectors ({dimensions}D)...")
+        np.random.seed(42)
+        
+        # Create realistic clustered data
+        centers = [np.random.randn(dimensions) * 10 for _ in range(min(10, num_vectors//100))]
+        vectors = []
+        
+        for i in range(num_vectors):
+            center = centers[i % len(centers)]
+            noise = np.random.randn(dimensions) * 0.5
+            vectors.append(center + noise)
+        
+        print(f"✅ Generated {len(vectors):,} test vectors")
+        return vectors
+    
+    def test_initialization(self, test_data: List[np.ndarray]) -> DARGv22:
+        """Test DARG initialization"""
+        print("\n🏗️  Testing Initialization...")
+        
+        performance_timer.reset_stats()
+        darg = DARGv22()
+        
+        sample_size = min(100, len(test_data))
+        sample_data = test_data[:sample_size]
+        
+        start_time = time.perf_counter()
+        darg.initialize(sample_data)
+        init_time = time.perf_counter() - start_time
+        
+        print(f"✅ Initialized in {init_time:.4f}s")
+        self.results['initialization'] = {'time': init_time, 'sample_size': sample_size}
+        return darg
+    
+    def test_bulk_insertions(self, darg: DARGv22, test_data: List[np.ndarray]) -> None:
+        """Test bulk insertion performance"""
+        print(f"\n📥 Testing Bulk Insertions ({len(test_data):,} vectors)...")
+        
+        start_time = time.perf_counter()
+        successful = 0
+        failed = 0
+        
+        # Progress tracking for large datasets
+        progress_interval = max(1000, len(test_data) // 20)
+        
+        for i, vector in enumerate(test_data):
+            point_id = f"point_{i}"
+            if darg.insert(point_id, vector):
+                successful += 1
+            else:
+                failed += 1
+            
+            if (i + 1) % progress_interval == 0:
+                elapsed = time.perf_counter() - start_time
+                rate = (i + 1) / elapsed
+                print(f"  Progress: {i+1:,}/{len(test_data):,} ({rate:.0f} inserts/sec)")
+        
+        total_time = time.perf_counter() - start_time
+        rate = successful / total_time if total_time > 0 else 0
+        
+        print(f"✅ Insertion Results:")
+        print(f"   Total time: {total_time:.2f}s")
+        print(f"   Successful: {successful:,}")
+        print(f"   Failed: {failed:,}")
+        print(f"   Rate: {rate:.0f} inserts/sec")
+        
+        self.results['insertions'] = {
+            'total_time': total_time,
+            'successful': successful,
+            'failed': failed,
+            'rate_per_sec': rate
+        }
+    
+    def test_search_performance(self, darg: DARGv22, num_queries: int = 100, k: int = 10) -> None:
+        """Test search performance"""
+        print(f"\n🔍 Testing Search Performance ({num_queries:,} queries, k={k})...")
+        
+        np.random.seed(123)
+        query_vectors = [np.random.randn(128) for _ in range(num_queries)]
+        
+        search_times = []
+        result_counts = []
+        
+        start_time = time.perf_counter()
+        
+        for i, query_vector in enumerate(query_vectors):
+            query_start = time.perf_counter()
+            results = darg.search(query_vector, k)
+            query_time = time.perf_counter() - query_start
+            
+            search_times.append(query_time)
+            result_counts.append(len(results))
+            
+            # Progress for large query sets
+            if num_queries > 50 and (i + 1) % (num_queries // 10) == 0:
+                print(f"  Completed {i+1:,}/{num_queries:,} queries...")
+        
+        total_time = time.perf_counter() - start_time
+        
+        # Calculate key statistics
+        avg_time = np.mean(search_times)
+        p95_time = np.percentile(search_times, 95)
+        p99_time = np.percentile(search_times, 99)
+        avg_results = np.mean(result_counts)
+        
+        print(f"✅ Search Results:")
+        print(f"   Total time: {total_time:.2f}s")
+        print(f"   Avg query time: {avg_time*1000:.2f}ms")
+        print(f"   P95 query time: {p95_time*1000:.2f}ms")
+        print(f"   P99 query time: {p99_time*1000:.2f}ms")
+        print(f"   Query rate: {num_queries/total_time:.0f} queries/sec")
+        print(f"   Avg results: {avg_results:.1f}")
+        
+        # Performance target analysis
+        target_ms = 1000
+        status = "✅ PASS" if p95_time * 1000 <= target_ms else "⚠️  SLOW"
+        print(f"   Sub-1s target: {status} (P95: {p95_time*1000:.1f}ms)")
+        
+        self.results['search'] = {
+            'total_time': total_time,
+            'avg_query_time': avg_time,
+            'p95_query_time': p95_time,
+            'p99_query_time': p99_time,
+            'queries_per_sec': num_queries / total_time,
+            'avg_results': avg_results
+        }
+    
+    def test_mixed_operations(self, darg: DARGv22, num_ops: int = 1000) -> None:
+        """Test mixed operations"""
+        print(f"\n🔄 Testing Mixed Operations ({num_ops:,} ops)...")
+        
+        np.random.seed(456)
+        start_time = time.perf_counter()
+        
+        ops = {'inserts': 0, 'searches': 0, 'deletes': 0}
+        
+        for i in range(num_ops):
+            operation = np.random.choice(['insert', 'search', 'delete'], p=[0.4, 0.5, 0.1])
+            
+            if operation == 'insert':
+                vector = np.random.randn(128)
+                darg.insert(f"mixed_{i}", vector)
+                ops['inserts'] += 1
+            elif operation == 'search':
+                query = np.random.randn(128)
+                darg.search(query, k=5)
+                ops['searches'] += 1
+            elif operation == 'delete':
+                point_id = f"point_{np.random.randint(0, min(1000, num_ops))}"
+                darg.delete(point_id)
+                ops['deletes'] += 1
+        
+        total_time = time.perf_counter() - start_time
+        rate = num_ops / total_time
+        
+        print(f"✅ Mixed ops completed in {total_time:.2f}s ({rate:.0f} ops/sec)")
+        print(f"   Inserts: {ops['inserts']:,} | Searches: {ops['searches']:,} | Deletes: {ops['deletes']:,}")
+        
+        self.results['mixed_ops'] = {'total_time': total_time, 'rate': rate, 'operations': ops}
+    
+    def generate_final_report(self) -> None:
+        """Generate final performance report"""
+        print("\n" + "="*70)
+        print("FINAL PERFORMANCE REPORT")
+        print("="*70)
+        
+        if 'insertions' in self.results:
+            ins = self.results['insertions']
+            print(f"📥 INSERTIONS: {ins['rate_per_sec']:.0f} inserts/sec")
+        
+        if 'search' in self.results:
+            search = self.results['search']
+            print(f"🔍 SEARCH: {search['queries_per_sec']:.0f} queries/sec")
+            print(f"   Latency - Avg: {search['avg_query_time']*1000:.1f}ms | P95: {search['p95_query_time']*1000:.1f}ms")
+        
+        if 'mixed_ops' in self.results:
+            mixed = self.results['mixed_ops']
+            print(f"🔄 MIXED OPS: {mixed['rate']:.0f} ops/sec")
+        
+        # Show timing breakdown
+        print(f"\n📊 TIMING BREAKDOWN:")
+        performance_timer.print_summary()
+        
+        # Performance assessment
+        print(f"\n🎯 PERFORMANCE ASSESSMENT:")
+        if 'search' in self.results:
+            p95_ms = self.results['search']['p95_query_time'] * 1000
+            if p95_ms <= 100:
+                print("   🟢 EXCELLENT: Ready for billion-scale deployment")
+            elif p95_ms <= 500:
+                print("   🟡 GOOD: Suitable for large-scale use")
+            elif p95_ms <= 1000:
+                print("   🟠 ACCEPTABLE: Meets sub-1s target")
+            else:
+                print("   🔴 NEEDS OPTIMIZATION: Above target latency")
+        
+        print("="*70)
+    
+    def run_performance_test(self, num_vectors: int = 10000, num_queries: int = 1000):
+        """Run comprehensive performance test"""
+        try:
+            print(f"🏁 Starting Performance Test")
+            print(f"   Dataset: {num_vectors:,} vectors")
+            print(f"   Queries: {num_queries:,}")
+            
+            # Generate data
+            test_data = self.generate_test_data(num_vectors)
+            
+            # Test sequence
+            darg = self.test_initialization(test_data)
+            self.test_bulk_insertions(darg, test_data)
+            self.test_search_performance(darg, num_queries)
+            self.test_mixed_operations(darg, min(5000, num_vectors//10))
+            
+            # Final report
+            self.generate_final_report()
+            
+            # Cleanup with timeout
+            print("\n🧹 Shutting down system...")
+            darg.shutdown()
+            
+            # Small delay to ensure clean shutdown
+            import time
+            time.sleep(0.5)
+            
+            print("🎉 Performance test completed successfully!")
+            
+        except Exception as e:
+            print(f"\n❌ Test failed: {e}")
+            import traceback
+            traceback.print_exc()
+        except KeyboardInterrupt:
+            print(f"\n⚠️  Test interrupted by user")
+        finally:
+            # Ensure we always try to clean up
+            try:
+                if 'darg' in locals():
+                    darg.shutdown()
+            except:
+                pass
+
+
+def main():
+    """Main function"""
+    # Parse arguments
+    if len(sys.argv) >= 2:
+        if sys.argv[1] == 'quick':
+            num_vectors, num_queries = 1000, 100
+        elif sys.argv[1] == 'medium':
+            num_vectors, num_queries = 10000, 1000
+        elif sys.argv[1] == 'large':
+            num_vectors, num_queries = 50000, 2000
+        elif sys.argv[1] == 'massive':
+            num_vectors, num_queries = 100000, 5000
+        else:
+            try:
+                num_vectors = int(sys.argv[1])
+                num_queries = int(sys.argv[2]) if len(sys.argv) > 2 else num_vectors // 10
+            except:
+                num_vectors, num_queries = 10000, 1000
+    else:
+        num_vectors, num_queries = 10000, 1000
+    
+    print(f"🔥 DARG v2.2 Performance Testing")
+    print(f"   Mode: {num_vectors:,} vectors, {num_queries:,} queries")
+    print("=" * 60)
+    
+    test_runner = DARGPerformanceTest()
+    test_runner.run_performance_test(num_vectors, num_queries)
+
+
+if __name__ == "__main__":
+    main()
 
 class DARGPerformanceTest:
     """Comprehensive performance testing for DARG v2.2"""
