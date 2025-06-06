@@ -752,7 +752,7 @@ class GridManager:
                     target_cell_id=cell.parent_cell_id,
                     target_cell_rep_proj=parent.representative_vector_proj.copy(),
                     activation_score=1.0,
-                    last_activation_timestamp=time.time()
+                    last_activation_timestamp: float = time.time()
                 )
                 cell.linkage_cache.append(entry)
         
@@ -768,7 +768,7 @@ class GridManager:
                                 target_cell_id=sibling_id,
                                 target_cell_rep_proj=sibling.representative_vector_proj.copy(),
                                 activation_score=0.8,
-                                last_activation_timestamp=time.time()
+                                last_activation_timestamp: float = time.time()
                             )
                             cell.linkage_cache.append(entry)
     
@@ -1236,7 +1236,7 @@ class MaintenanceScheduler:
         """Adapt linkage caches across all cells"""
         current_time = time.time()
         
-        for cell_id, cell in self.grid_manager.cells_store.items():
+        for cell_id, cell in list(self.grid_manager.cells_store.items()):
             if not cell.linkage_cache:
                 continue
             
@@ -1303,7 +1303,7 @@ class MaintenanceScheduler:
         if not point_db:
             return
         
-        for cell_id, cell in self.grid_manager.cells_store.items():
+        for cell_id, cell in list(self.grid_manager.cells_store.items()):
             if (not cell.is_leaf or 
                 cell.updates_since_last_pca < self.config.updates_threshold_for_pca or
                 len(cell.point_ids) < 10):
@@ -1340,7 +1340,7 @@ class MaintenanceScheduler:
         if not point_db:
             return
         
-        for cell_id, cell in self.grid_manager.cells_store.items():
+        for cell_id, cell in list(self.grid_manager.cells_store.items()):
             if (not cell.is_leaf or 
                 not cell.local_pca_model or
                 cell.updates_since_last_pca < self.config.updates_threshold_for_pca * 2):
@@ -1471,7 +1471,7 @@ class DARGv22:
             
             # Process cells data
             cells_data = {}
-            for cell_id, cell in self.grid_manager.cells_store.items():
+            for cell_id, cell in list(self.grid_manager.cells_store.items()):
                 cell_state = cell.__getstate__() if hasattr(cell, '__getstate__') else cell.__dict__.copy()
                 if '_lock' in cell_state:
                     del cell_state['_lock']
@@ -1807,25 +1807,29 @@ class DARGv22:
 # ============================================================================
 
 def example_usage():
-    """Example usage of DARG v2.2 with 1 million data points"""
+    """Example usage of DARG v2.2 with 1 BILLION data points"""
     
-    print("DARG v2.2 - Testing with 1 Million Data Points")
+    print("DARG v2.2 - Testing with 1 BILLION Data Points")
     print("=" * 60)
     
-    # Create system with optimized configuration for large scale
+    # Create system with heavily optimized configuration for 1B points
     darg = DARGv22()
     
-    # Optimize configuration for 1M points
-    darg.config.base_max_pop_per_cell = 500  # Larger cells
-    darg.config.beam_width_B = 8  # Wider beam search
-    darg.config.K_top_candidates = 100  # More candidates
-    darg.config.pca_batch_size = 2000  # Larger PCA batches
-    darg.config.maintenance_interval_seconds = 600  # Less frequent maintenance
+    # Ultra-optimized configuration for 1B points
+    darg.config.base_max_pop_per_cell = 2000  # Much larger cells
+    darg.config.beam_width_B = 12  # Wider beam search
+    darg.config.K_top_candidates = 200  # More candidates
+    darg.config.pca_batch_size = 5000  # Larger PCA batches
+    darg.config.maintenance_interval_seconds = 1800  # Much less frequent maintenance (30 min)
+    darg.config.max_grid_depth = 25  # Allow deeper grid
+    darg.config.proj_dimensions = 8  # Smaller projections for speed
+    darg.config.LID_sample_size = 30  # Smaller LID samples
+    darg.config.updates_threshold_for_pca = 200  # Less frequent PCA updates
     
     # Generate initial sample data for grid initialization
     print("Generating initial sample data...")
     np.random.seed(42)
-    initial_sample = [np.random.randn(128) for _ in range(1000)]
+    initial_sample = [np.random.randn(128) for _ in range(5000)]  # Larger initial sample
     
     # Initialize with sample data
     print("Initializing DARG system...")
@@ -1834,19 +1838,32 @@ def example_usage():
     init_time = time.time() - start_time
     print(f"System initialized in {init_time:.2f} seconds")
     
-    # Generate and insert 1 million data points
-    print("\nGenerating and inserting 1,000,000 data points...")
-    total_points = 1000000
-    batch_size = 10000
+    # Generate and insert 1 BILLION data points
+    print("\nGenerating and inserting 1,000,000,000 data points...")
+    total_points = 1_000_000_000  # 1 billion
+    batch_size = 100000  # Much larger batches for efficiency
     num_batches = total_points // batch_size
     
+    print(f"Processing {num_batches:,} batches of {batch_size:,} points each")
+    
     total_start_time = time.time()
+    checkpoint_interval = 500  # Save checkpoint every 500 batches
     
     for batch_idx in range(num_batches):
         batch_start_time = time.time()
         
-        # Generate batch of data points
-        batch_data = [np.random.randn(128) for _ in range(batch_size)]
+        # Generate batch of data points with varied distributions for realism
+        if batch_idx % 100 == 0:
+            # Every 100th batch: clustered data
+            centers = [np.random.randn(128) * 10 for _ in range(10)]
+            batch_data = []
+            for _ in range(batch_size):
+                center = centers[np.random.randint(0, len(centers))]
+                noise = np.random.randn(128) * 0.5
+                batch_data.append(center + noise)
+        else:
+            # Regular random data
+            batch_data = [np.random.randn(128) for _ in range(batch_size)]
         
         # Insert batch points
         successful_insertions = 0
@@ -1859,23 +1876,47 @@ def example_usage():
         batch_time = time.time() - batch_start_time
         total_inserted = (batch_idx + 1) * batch_size
         
-        # Progress update
-        print(f"Batch {batch_idx + 1:3d}/{num_batches}: {successful_insertions:5d}/{batch_size} points inserted "
-              f"in {batch_time:6.2f}s | Total: {total_inserted:7,} points")
-        
-        # Print detailed stats every 10 batches
+        # Progress update every 10 batches
         if (batch_idx + 1) % 10 == 0:
+            elapsed_time = time.time() - total_start_time
+            rate = total_inserted / elapsed_time
+            percent_complete = (batch_idx + 1) / num_batches * 100
+            eta_seconds = (num_batches - batch_idx - 1) * (elapsed_time / (batch_idx + 1))
+            eta_hours = eta_seconds / 3600
+            
+            print(f"Batch {batch_idx + 1:4d}/{num_batches}: {successful_insertions:6d}/{batch_size} points "
+                  f"in {batch_time:6.2f}s | Total: {total_inserted:11,} points | "
+                  f"{percent_complete:5.2f}% | Rate: {rate:6.0f} pts/sec | ETA: {eta_hours:.1f}h")
+        
+        # Print detailed stats every 100 batches
+        if (batch_idx + 1) % 100 == 0:
             stats = darg.get_stats()
             elapsed_time = time.time() - total_start_time
             rate = total_inserted / elapsed_time
-            print(f"  Stats: {stats['total_cells']} cells, {stats['leaf_cells']} leaves, "
-                  f"depth {stats['max_depth']} | Rate: {rate:.0f} points/sec")
+            print(f"  *** Stats: {stats['total_cells']:,} cells, {stats['leaf_cells']:,} leaves, "
+                  f"depth {stats['max_depth']} | Rate: {rate:.0f} points/sec ***")
+        
+        # Checkpoint saving every 500 batches
+        if (batch_idx + 1) % checkpoint_interval == 0:
+            checkpoint_start = time.time()
+            checkpoint_file = f"darg_1b_checkpoint_{batch_idx + 1}.pkl"
+            print(f"\n  Saving checkpoint at batch {batch_idx + 1}...")
+            darg.save_index(checkpoint_file)
+            checkpoint_time = time.time() - checkpoint_start
+            print(f"  Checkpoint saved in {checkpoint_time:.2f} seconds\n")
+        
+        # Memory cleanup hint every 1000 batches
+        if (batch_idx + 1) % 1000 == 0:
+            import gc
+            gc.collect()
+    
+
     
     total_insertion_time = time.time() - total_start_time
     insertion_rate = total_points / total_insertion_time
     
     print(f"\nInsertion completed!")
-    print(f"Total time: {total_insertion_time:.2f} seconds")
+    print(f"Total time: {total_insertion_time:.2f} seconds ({total_insertion_time/3600:.2f} hours)")
     print(f"Average rate: {insertion_rate:.0f} points/second")
     
     # Get final system statistics
@@ -1889,14 +1930,14 @@ def example_usage():
         else:
             print(f"{key:25}: {value}")
     
-    # Test search performance
+    # Test search performance with reduced query count for time
     print("\n" + "=" * 60)
     print("SEARCH PERFORMANCE TEST")
     print("=" * 60)
     
-    # Test multiple queries with different k values
-    test_queries = 50
-    k_values = [1, 10, 50, 100]
+    # Test fewer queries but different k values
+    test_queries = 20  # Reduced for 1B scale
+    k_values = [1, 10, 50, 100, 500]  # Added k=500 for large scale
     
     for k in k_values:
         print(f"\nTesting {test_queries} queries with k={k}...")
@@ -1918,7 +1959,7 @@ def example_usage():
         min_time = min(search_times)
         max_time = max(search_times)
         
-        print(f"k={k:3d}: avg={avg_time*1000:6.2f}ms, min={min_time*1000:6.2f}ms, max={max_time*1000:6.2f}ms")
+        print(f"k={k:3d}: avg={avg_time*1000:7.2f}ms, min={min_time*1000:7.2f}ms, max={max_time*1000:7.2f}ms")
         
         # Show sample results for k=10
         if k == 10:
@@ -1928,14 +1969,14 @@ def example_usage():
             for i, (point_id, distance) in enumerate(results[:5]):
                 print(f"  {i+1:2d}. {point_id}: {distance:.4f}")
     
-    # Test deletion performance
+    # Test deletion performance (reduced scale)
     print("\n" + "=" * 60)
     print("DELETION PERFORMANCE TEST")
     print("=" * 60)
     
-    # Delete some random points
-    delete_count = 1000
-    print(f"Testing deletion of {delete_count} random points...")
+    # Delete fewer random points for 1B scale
+    delete_count = 10000  # Increased but reasonable
+    print(f"Testing deletion of {delete_count:,} random points...")
     
     # Select random points to delete
     delete_points = [f"point_{np.random.randint(0, total_points)}" for _ in range(delete_count)]
@@ -1943,76 +1984,89 @@ def example_usage():
     delete_start_time = time.time()
     successful_deletions = 0
     
-    for point_id in delete_points:
+    for i, point_id in enumerate(delete_points):
         success = darg.delete(point_id)
         if success:
             successful_deletions += 1
+        
+        # Progress for deletions
+        if (i + 1) % 1000 == 0:
+            elapsed = time.time() - delete_start_time
+            rate = (i + 1) / elapsed
+            print(f"  Deleted {i + 1:,}/{delete_count:,} points ({rate:.0f} deletions/sec)")
     
     delete_time = time.time() - delete_start_time
     delete_rate = successful_deletions / delete_time
     
-    print(f"Deleted {successful_deletions}/{delete_count} points in {delete_time:.2f} seconds")
+    print(f"Deleted {successful_deletions:,}/{delete_count:,} points in {delete_time:.2f} seconds")
     print(f"Deletion rate: {delete_rate:.0f} points/second")
     
     # Final stats after deletions
     final_stats = darg.get_stats()
     print(f"Final point count: {final_stats['total_points']:,}")
     
-    # Save index
+    # Save final index
     print("\n" + "=" * 60)
-    print("INDEX SERIALIZATION TEST")
+    print("FINAL INDEX SERIALIZATION")
     print("=" * 60)
     
-    print("Saving index to disk...")
+    print("Saving final 1B point index to disk...")
     save_start = time.time()
-    darg.save_index("darg_1m_index.pkl")
+    darg.save_index("darg_1b_final_index.pkl")
     save_time = time.time() - save_start
-    print(f"Index saved in {save_time:.2f} seconds")
+    print(f"Final index saved in {save_time:.2f} seconds")
     
-    # Check file size
+    # Check file sizes
     import os
     file_stats = []
     for ext in ['.manifest', '_arrays.joblib', '_data.json']:
-        filepath = f"darg_1m_index{ext}"
+        filepath = f"darg_1b_final_index{ext}"
         if os.path.exists(filepath):
-            size_mb = os.path.getsize(filepath) / (1024 * 1024)
-            file_stats.append(f"{filepath}: {size_mb:.1f} MB")
+            size_gb = os.path.getsize(filepath) / (1024 * 1024 * 1024)
+            file_stats.append(f"{filepath}: {size_gb:.2f} GB")
     
     if file_stats:
-        print("Saved files:")
+        print("Final saved files:")
         for stat in file_stats:
             print(f"  {stat}")
     
     # Shutdown
     darg.shutdown()
     
-    # Test loading
-    print("\nTesting index loading...")
-    darg2 = DARGv22()
+    # Test loading (optional for 1B scale - might be time consuming)
+    test_loading = input("\nTest loading the 1B index? (y/n): ").lower() == 'y'
     
-    load_start = time.time()
-    darg2.load_index("darg_1m_index.pkl")
-    load_time = time.time() - load_start
-    print(f"Index loaded in {load_time:.2f} seconds")
-    
-    # Verify loaded system
-    loaded_stats = darg2.get_stats()
-    print(f"Loaded system has {loaded_stats['total_points']:,} points")
-    
-    # Test search in loaded system
-    query_vector = np.random.randn(128)
-    results2 = darg2.search(query_vector, k=5)
-    print(f"\nLoaded system search results:")
-    for i, (point_id, distance) in enumerate(results2):
-        print(f"  {i+1}. {point_id}: {distance:.4f}")
-    
-    darg2.shutdown()
+    if test_loading:
+        print("Testing 1B index loading...")
+        darg2 = DARGv22()
+        
+        load_start = time.time()
+        darg2.load_index("darg_1b_final_index.pkl")
+        load_time = time.time() - load_start
+        print(f"1B index loaded in {load_time:.2f} seconds")
+        
+        # Verify loaded system
+        loaded_stats = darg2.get_stats()
+        print(f"Loaded system has {loaded_stats['total_points']:,} points")
+        
+        # Test search in loaded system
+        query_vector = np.random.randn(128)
+        results2 = darg2.search(query_vector, k=5)
+        print(f"\nLoaded system search results:")
+        for i, (point_id, distance) in enumerate(results2):
+            print(f"  {i+1}. {point_id}: {distance:.4f}")
+        
+        darg2.shutdown()
     
     # Print performance summary
     print("\n" + "=" * 60)
-    print("PERFORMANCE SUMMARY")
+    print("1 BILLION POINT PERFORMANCE SUMMARY")
     print("=" * 60)
     performance_timer.print_summary()
+    
+    print(f"\nTotal points processed: {total_points:,}")
+    print(f"Total processing time: {total_insertion_time/3600:.2f} hours")
+    print(f"Average insertion rate: {insertion_rate:.0f} points/second")
 
 if __name__ == "__main__":
     example_usage()
