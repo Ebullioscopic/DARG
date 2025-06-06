@@ -124,7 +124,7 @@ class DARGPerformanceTest:
             result_counts.append(len(results))
             
             # Progress for large query sets
-            if num_queries > 50 and (i + 1) % (num_queries // 10) == 0:
+            if num_queries > 50 and (i + 1) % (num_queries // 1000) == 0:
                 print(f"  Completed {i+1:,}/{num_queries:,} queries...")
         
         total_time = time.perf_counter() - start_time
@@ -732,3 +732,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    

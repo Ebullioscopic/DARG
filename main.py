@@ -1510,6 +1510,30 @@ class DARGv22:
                             else:
                                 pca_data[pca_key] = pca_value
                         cell_serializable[key] = pca_data
+                    elif key == 'linkage_cache' and value is not None:
+                        # Handle LinkageEntry objects
+                        linkage_data = []
+                        for entry in value:
+                            if hasattr(entry, 'target_cell_rep_proj') and isinstance(entry.target_cell_rep_proj, np.ndarray):
+                                array_key = f"cell_{cell_id}_linkage_{len(linkage_data)}"
+                                numpy_data[array_key] = entry.target_cell_rep_proj
+                                entry_data = {
+                                    'target_cell_id': entry.target_cell_id,
+                                    'target_cell_rep_proj': f"__NUMPY_REF__{array_key}",
+                                    'activation_score': entry.activation_score,
+                                    'last_activation_timestamp': entry.last_activation_timestamp
+                                }
+                            else:
+                                # Fallback for cases where entry might be a dict already
+                                entry_data = entry.__dict__ if hasattr(entry, '__dict__') else entry
+                            linkage_data.append(entry_data)
+                        cell_serializable[key] = linkage_data
+                    elif key == 'query_stats' and value is not None:
+                        # Handle QueryStats dataclass
+                        if hasattr(value, '__dict__'):
+                            cell_serializable[key] = value.__dict__
+                        else:
+                            cell_serializable[key] = value
                     else:
                         cell_serializable[key] = value
                 
@@ -1668,6 +1692,32 @@ class DARGv22:
                         else:
                             pca_model[pca_key] = pca_value
                     reconstructed_state[key] = pca_model
+                elif key == 'linkage_cache' and value is not None:
+                    # Reconstruct LinkageEntry objects
+                    linkage_cache = []
+                    for entry_data in value:
+                        # Reconstruct numpy array reference
+                        if isinstance(entry_data.get('target_cell_rep_proj'), str) and entry_data['target_cell_rep_proj'].startswith('__NUMPY_REF__'):
+                            array_key = entry_data['target_cell_rep_proj'].replace('__NUMPY_REF__', '')
+                            target_cell_rep_proj = numpy_data[array_key]
+                        else:
+                            target_cell_rep_proj = entry_data.get('target_cell_rep_proj')
+                        
+                        # Create LinkageEntry object
+                        entry = LinkageEntry(
+                            target_cell_id=entry_data['target_cell_id'],
+                            target_cell_rep_proj=target_cell_rep_proj,
+                            activation_score=entry_data['activation_score'],
+                            last_activation_timestamp=entry_data['last_activation_timestamp']
+                        )
+                        linkage_cache.append(entry)
+                    reconstructed_state[key] = linkage_cache
+                elif key == 'query_stats' and value is not None:
+                    # Reconstruct QueryStats object
+                    reconstructed_state[key] = QueryStats(
+                        total_queries_passed_through=value.get('total_queries_passed_through', 0),
+                        queries_hopped_via_linkage=value.get('queries_hopped_via_linkage', 0)
+                    )
                 else:
                     reconstructed_state[key] = value
             
@@ -1757,60 +1807,212 @@ class DARGv22:
 # ============================================================================
 
 def example_usage():
-    """Example usage of DARG v2.2"""
+    """Example usage of DARG v2.2 with 1 million data points"""
     
-    # Create system
+    print("DARG v2.2 - Testing with 1 Million Data Points")
+    print("=" * 60)
+    
+    # Create system with optimized configuration for large scale
     darg = DARGv22()
     
-    # Generate sample data
+    # Optimize configuration for 1M points
+    darg.config.base_max_pop_per_cell = 500  # Larger cells
+    darg.config.beam_width_B = 8  # Wider beam search
+    darg.config.K_top_candidates = 100  # More candidates
+    darg.config.pca_batch_size = 2000  # Larger PCA batches
+    darg.config.maintenance_interval_seconds = 600  # Less frequent maintenance
+    
+    # Generate initial sample data for grid initialization
+    print("Generating initial sample data...")
     np.random.seed(42)
-    sample_data = [np.random.randn(128) for _ in range(100)]
+    initial_sample = [np.random.randn(128) for _ in range(1000)]
     
     # Initialize with sample data
-    darg.initialize(sample_data)
+    print("Initializing DARG system...")
+    start_time = time.time()
+    darg.initialize(initial_sample)
+    init_time = time.time() - start_time
+    print(f"System initialized in {init_time:.2f} seconds")
     
-    # Insert points
-    for i, vector in enumerate(sample_data):
-        success = darg.insert(f"point_{i}", vector)
-        if not success:
-            print(f"Failed to insert point_{i}")
+    # Generate and insert 1 million data points
+    print("\nGenerating and inserting 1,000,000 data points...")
+    total_points = 1000000
+    batch_size = 10000
+    num_batches = total_points // batch_size
     
-    # Insert additional points
-    for i in range(100, 200):
-        vector = np.random.randn(128)
-        darg.insert(f"point_{i}", vector)
+    total_start_time = time.time()
     
-    # Search for nearest neighbors
-    query_vector = np.random.randn(128)
-    results = darg.search(query_vector, k=10)
+    for batch_idx in range(num_batches):
+        batch_start_time = time.time()
+        
+        # Generate batch of data points
+        batch_data = [np.random.randn(128) for _ in range(batch_size)]
+        
+        # Insert batch points
+        successful_insertions = 0
+        for i, vector in enumerate(batch_data):
+            point_id = f"point_{batch_idx * batch_size + i}"
+            success = darg.insert(point_id, vector)
+            if success:
+                successful_insertions += 1
+        
+        batch_time = time.time() - batch_start_time
+        total_inserted = (batch_idx + 1) * batch_size
+        
+        # Progress update
+        print(f"Batch {batch_idx + 1:3d}/{num_batches}: {successful_insertions:5d}/{batch_size} points inserted "
+              f"in {batch_time:6.2f}s | Total: {total_inserted:7,} points")
+        
+        # Print detailed stats every 10 batches
+        if (batch_idx + 1) % 10 == 0:
+            stats = darg.get_stats()
+            elapsed_time = time.time() - total_start_time
+            rate = total_inserted / elapsed_time
+            print(f"  Stats: {stats['total_cells']} cells, {stats['leaf_cells']} leaves, "
+                  f"depth {stats['max_depth']} | Rate: {rate:.0f} points/sec")
     
-    print("Search Results:")
-    for point_id, distance in results:
-        print(f"  {point_id}: {distance:.4f}")
+    total_insertion_time = time.time() - total_start_time
+    insertion_rate = total_points / total_insertion_time
     
-    # Get system statistics
+    print(f"\nInsertion completed!")
+    print(f"Total time: {total_insertion_time:.2f} seconds")
+    print(f"Average rate: {insertion_rate:.0f} points/second")
+    
+    # Get final system statistics
+    print("\n" + "=" * 60)
+    print("FINAL SYSTEM STATISTICS")
+    print("=" * 60)
     stats = darg.get_stats()
-    print(f"\nSystem Statistics:")
     for key, value in stats.items():
-        print(f"  {key}: {value}")
+        if isinstance(value, int):
+            print(f"{key:25}: {value:,}")
+        else:
+            print(f"{key:25}: {value}")
+    
+    # Test search performance
+    print("\n" + "=" * 60)
+    print("SEARCH PERFORMANCE TEST")
+    print("=" * 60)
+    
+    # Test multiple queries with different k values
+    test_queries = 50
+    k_values = [1, 10, 50, 100]
+    
+    for k in k_values:
+        print(f"\nTesting {test_queries} queries with k={k}...")
+        search_times = []
+        
+        for query_idx in range(test_queries):
+            # Generate random query vector
+            query_vector = np.random.randn(128)
+            
+            # Measure search time
+            search_start = time.time()
+            results = darg.search(query_vector, k=k)
+            search_time = time.time() - search_start
+            
+            search_times.append(search_time)
+        
+        # Calculate statistics
+        avg_time = sum(search_times) / len(search_times)
+        min_time = min(search_times)
+        max_time = max(search_times)
+        
+        print(f"k={k:3d}: avg={avg_time*1000:6.2f}ms, min={min_time*1000:6.2f}ms, max={max_time*1000:6.2f}ms")
+        
+        # Show sample results for k=10
+        if k == 10:
+            query_vector = np.random.randn(128)
+            results = darg.search(query_vector, k=10)
+            print(f"Sample search results (k=10):")
+            for i, (point_id, distance) in enumerate(results[:5]):
+                print(f"  {i+1:2d}. {point_id}: {distance:.4f}")
+    
+    # Test deletion performance
+    print("\n" + "=" * 60)
+    print("DELETION PERFORMANCE TEST")
+    print("=" * 60)
+    
+    # Delete some random points
+    delete_count = 1000
+    print(f"Testing deletion of {delete_count} random points...")
+    
+    # Select random points to delete
+    delete_points = [f"point_{np.random.randint(0, total_points)}" for _ in range(delete_count)]
+    
+    delete_start_time = time.time()
+    successful_deletions = 0
+    
+    for point_id in delete_points:
+        success = darg.delete(point_id)
+        if success:
+            successful_deletions += 1
+    
+    delete_time = time.time() - delete_start_time
+    delete_rate = successful_deletions / delete_time
+    
+    print(f"Deleted {successful_deletions}/{delete_count} points in {delete_time:.2f} seconds")
+    print(f"Deletion rate: {delete_rate:.0f} points/second")
+    
+    # Final stats after deletions
+    final_stats = darg.get_stats()
+    print(f"Final point count: {final_stats['total_points']:,}")
     
     # Save index
-    darg.save_index("darg_index.pkl")
+    print("\n" + "=" * 60)
+    print("INDEX SERIALIZATION TEST")
+    print("=" * 60)
+    
+    print("Saving index to disk...")
+    save_start = time.time()
+    darg.save_index("darg_1m_index.pkl")
+    save_time = time.time() - save_start
+    print(f"Index saved in {save_time:.2f} seconds")
+    
+    # Check file size
+    import os
+    file_stats = []
+    for ext in ['.manifest', '_arrays.joblib', '_data.json']:
+        filepath = f"darg_1m_index{ext}"
+        if os.path.exists(filepath):
+            size_mb = os.path.getsize(filepath) / (1024 * 1024)
+            file_stats.append(f"{filepath}: {size_mb:.1f} MB")
+    
+    if file_stats:
+        print("Saved files:")
+        for stat in file_stats:
+            print(f"  {stat}")
     
     # Shutdown
     darg.shutdown()
     
-    # Load index in new system
+    # Test loading
+    print("\nTesting index loading...")
     darg2 = DARGv22()
-    darg2.load_index("darg_index.pkl")
+    
+    load_start = time.time()
+    darg2.load_index("darg_1m_index.pkl")
+    load_time = time.time() - load_start
+    print(f"Index loaded in {load_time:.2f} seconds")
+    
+    # Verify loaded system
+    loaded_stats = darg2.get_stats()
+    print(f"Loaded system has {loaded_stats['total_points']:,} points")
     
     # Test search in loaded system
+    query_vector = np.random.randn(128)
     results2 = darg2.search(query_vector, k=5)
     print(f"\nLoaded system search results:")
-    for point_id, distance in results2:
-        print(f"  {point_id}: {distance:.4f}")
+    for i, (point_id, distance) in enumerate(results2):
+        print(f"  {i+1}. {point_id}: {distance:.4f}")
     
     darg2.shutdown()
+    
+    # Print performance summary
+    print("\n" + "=" * 60)
+    print("PERFORMANCE SUMMARY")
+    print("=" * 60)
+    performance_timer.print_summary()
 
 if __name__ == "__main__":
     example_usage()
