@@ -1,0 +1,41 @@
+# DARG (Distributed Adaptive Routing Graph) - Requirements
+
+## Core Dependencies
+numpy>=1.21.0
+scipy>=1.7.0
+scikit-learn>=1.0.0
+
+## Data Processing
+h5py>=3.0.0
+pandas>=1.3.0
+
+## Networking and Downloads  
+requests>=2.25.0
+tqdm>=4.62.0
+
+## Visualization
+matplotlib>=3.4.0
+seaborn>=0.11.0
+
+## Development and Testing
+pytest>=6.0.0
+pytest-cov>=2.12.0
+
+## Optional GPU Acceleration
+# torch>=1.9.0  # For PyTorch MPS on Apple Silicon
+# cupy>=9.0.0   # For CUDA acceleration
+
+## System Monitoring (optional)
+psutil>=5.8.0
+
+## High-Performance Serialization
+orjson>=3.6.0
+joblib>=1.1.0
+
+## Type Hints
+typing-extensions>=3.10.0
+
+## Development Tools
+black>=21.0.0
+flake8>=3.9.0
+mypy>=0.910

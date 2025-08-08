@@ -8,15 +8,47 @@ __pycache__/
 *.pkl
 *.egg
 *.egg-info/
-# Ignore all files in the data directory
-data/*
-# But keep the data directory itself
-!data/
-# Ignore all files in the models directory
-models/*
-# But keep the models directory itself
-!models/
-# Ignore all files in the experiments directory
-experiments/*
-# But keep config.json (negate the previous rule)
+# Dataset directories
+datasets/
+data/
+benchmark_data/
+!datasets/.gitkeep
+!data/.gitkeep
+
+# Model directories  
+models/
+saved_models/
+trained_models/
+model_cache/
+!models/.gitkeep
+!saved_models/.gitkeep
+
+# Large files and model artifacts
+*.joblib
+*.hdf5
+*.fvecs
+*.bvecs
+*.ivecs
+*.npy
+*.npz
+*.h5
+
+# Temporary and cache directories
+experiments/
+temp/
+tmp/
+cache/
+.cache/
+downloads/
+
+# But keep config files
 !config.json
+!**/config.json
+.python-version
+.env
+*.pdf
+*.log
+.github/
+.DS_Store
+refdata/
+.venv/
