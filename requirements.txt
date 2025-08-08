@@ -1,41 +1,55 @@
-# DARG (Distributed Adaptive Routing Graph) - Requirements
+# DARG - Dynamic Adaptive Resonance Grids
+# Core dependencies for universal multi-modal vector search
 
-## Core Dependencies
+# Core mathematical libraries
 numpy>=1.21.0
 scipy>=1.7.0
 scikit-learn>=1.0.0
 
-## Data Processing
+# Data processing and I/O
 h5py>=3.0.0
 pandas>=1.3.0
+joblib>=1.1.0
 
-## Networking and Downloads  
+# System utilities
 requests>=2.25.0
 tqdm>=4.62.0
+psutil>=5.8.0
 
-## Visualization
+# Visualization (basic)
 matplotlib>=3.4.0
-seaborn>=0.11.0
 
-## Development and Testing
+# Development and testing
 pytest>=6.0.0
 pytest-cov>=2.12.0
 
-## Optional GPU Acceleration
-# torch>=1.9.0  # For PyTorch MPS on Apple Silicon
-# cupy>=9.0.0   # For CUDA acceleration
-
-## System Monitoring (optional)
-psutil>=5.8.0
-
-## High-Performance Serialization
-orjson>=3.6.0
-joblib>=1.1.0
-
-## Type Hints
+# Type checking
 typing-extensions>=3.10.0
 
-## Development Tools
-black>=21.0.0
-flake8>=3.9.0
-mypy>=0.910
+# Optional dependencies (uncomment as needed):
+
+# Text processing
+# transformers>=4.20.0
+# torch>=1.9.0
+# sentence-transformers>=2.2.0
+
+# Image processing  
+# opencv-python>=4.5.0
+# Pillow>=8.0.0
+
+# Audio processing
+# librosa>=0.8.0
+# soundfile>=0.10.0
+
+# Graph visualization
+# neo4j>=5.0.0
+# seaborn>=0.11.0
+
+# Performance optimization
+# faiss-cpu>=1.7.0
+# numba>=0.56.0
+
+# Development tools
+# black>=21.0.0
+# flake8>=3.9.0  
+# mypy>=0.910
